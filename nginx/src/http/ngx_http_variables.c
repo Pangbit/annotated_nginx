@@ -1,6 +1,7 @@
 // annotated by chrono since 2016
 //
 // * ngx_http_add_variable
+// * ngx_http_get_variable
 // * ngx_http_variables_init_vars
 
 /*
@@ -430,6 +431,7 @@ ngx_http_add_variable(ngx_conf_t *cf, ngx_str_t *name, ngx_uint_t flags)
     // 但如果是changeable的是可以的
     key = cmcf->variables_keys->keys.elts;
     for (i = 0; i < cmcf->variables_keys->keys.nelts; i++) {
+        // 大小写无关比较变量名
         if (name->len != key[i].key.len
             || ngx_strncasecmp(name->data, key[i].key.data, name->len) != 0)
         {
@@ -445,6 +447,8 @@ ngx_http_add_variable(ngx_conf_t *cf, ngx_str_t *name, ngx_uint_t flags)
             return NULL;
         }
 
+        // 标志位去掉weak
+        // 如果没有weak，则设置除weak外的所有位
         if (!(flags & NGX_HTTP_VAR_WEAK)) {
             v->flags &= ~NGX_HTTP_VAR_WEAK;
         }
@@ -478,7 +482,7 @@ ngx_http_add_variable(ngx_conf_t *cf, ngx_str_t *name, ngx_uint_t flags)
     v->flags = flags;
     v->index = 0;
 
-    // 把变量的hash key加入查找数组，方便之后查找
+    // 把变量的hash key加入查找数组，方便之后建立散列表查找
     rc = ngx_hash_add_key(cmcf->variables_keys, &v->name, v, 0);
 
     if (rc == NGX_ERROR) {
@@ -506,12 +510,15 @@ ngx_http_add_prefix_variable(ngx_conf_t *cf, ngx_str_t *name, ngx_uint_t flags)
     ngx_http_variable_t        *v;
     ngx_http_core_main_conf_t  *cmcf;
 
+    // 取core配置
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 
     // 在数组里查找是否已经有变量
     // 有则返回，否则添加进数组
+    // 注意是prefix_variables
     v = cmcf->prefix_variables.elts;
     for (i = 0; i < cmcf->prefix_variables.nelts; i++) {
+        // 大小写无关比较变量名
         if (name->len != v[i].name.len
             || ngx_strncasecmp(name->data, v[i].name.data, name->len) != 0)
         {
@@ -527,6 +534,7 @@ ngx_http_add_prefix_variable(ngx_conf_t *cf, ngx_str_t *name, ngx_uint_t flags)
         }
 
         // 标志位去掉weak
+        // 如果没有weak，则设置除weak外的所有位
         if (!(flags & NGX_HTTP_VAR_WEAK)) {
             v->flags &= ~NGX_HTTP_VAR_WEAK;
         }
@@ -2587,7 +2595,9 @@ ngx_http_regex_exec(ngx_http_request_t *r, ngx_http_regex_t *re, ngx_str_t *s)
     if (re->ncaptures) {
         len = cmcf->ncaptures;
 
-        if (r->captures == NULL) {
+        if (r->captures == NULL || r->realloc_captures) {
+            r->realloc_captures = 0;
+
             r->captures = ngx_palloc(r->pool, len * sizeof(int));
             if (r->captures == NULL) {
                 return NGX_ERROR;
@@ -2729,19 +2739,25 @@ ngx_http_variables_init_vars(ngx_conf_t *cf)
 
                 av->index = i;
 
+                // 没有get handler或者是weak
                 if (av->get_handler == NULL
                     || (av->flags & NGX_HTTP_VAR_WEAK))
                 {
+                    // 跳出本循环
                     break;
                 }
 
+                // 跳回最上层循环continue
                 goto next;
             }
         }
 
+        // 没有get handler或者是weak
+
         len = 0;
         av = NULL;
 
+        // 为有前缀的变量设置get handler
         for (n = 0; n < cmcf->prefix_variables.nelts; n++) {
             if (v[i].name.len >= pv[n].name.len && v[i].name.len > len
                 && ngx_strncmp(v[i].name.data, pv[n].name.data, pv[n].name.len)
@@ -2757,9 +2773,11 @@ ngx_http_variables_init_vars(ngx_conf_t *cf)
             v[i].data = (uintptr_t) &v[i].name;
             v[i].flags = av->flags;
 
+            // 跳回最上层循环continue
             goto next;
         }
 
+        // 没有get handler则报错，无法处理变量
         if (v[i].get_handler == NULL) {
             ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
                           "unknown \"%V\" variable", &v[i].name);

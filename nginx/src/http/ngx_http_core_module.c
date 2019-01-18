@@ -1120,7 +1120,7 @@ ngx_http_core_rewrite_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     // 调用每个模块自己的处理函数
     rc = ph->handler(r);
 
-    // 模块handler返回decline，表示不处理
+    // 模块handler返回decline，表示成功
     if (rc == NGX_DECLINED) {
         // 继续在本阶段（rewrite）里查找下一个模块
         // 索引加1
@@ -2848,7 +2848,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
         return NGX_ERROR;
     }
 
-    // ???
+    // 已经设置标志位，不允许再设置
     if (r->subrequest_in_memory) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "nested in-memory subrequest \"%V\"", uri);
@@ -3035,6 +3035,14 @@ ngx_http_subrequest(ngx_http_request_t *r,
         sr->content_handler = r->content_handler;
         sr->phase_handler = r->phase_handler;
         sr->write_event_handler = ngx_http_core_run_phases;
+
+#if (NGX_PCRE)
+        sr->ncaptures = r->ncaptures;
+        sr->captures = r->captures;
+        sr->captures_data = r->captures_data;
+        sr->realloc_captures = 1;
+        r->realloc_captures = 1;
+#endif
 
         ngx_http_update_location_config(sr);
     }

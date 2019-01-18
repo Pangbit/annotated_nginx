@@ -4,6 +4,7 @@
 // * ngx_http_upstream_init
 // * ngx_http_upstream_init_request
 // * ngx_http_upstream_send_request
+// * ngx_http_upstream_process_header
 // * ngx_http_upstream_finalize_request
 
 /*
@@ -451,6 +452,10 @@ static ngx_http_variable_t  ngx_http_upstream_vars[] = {
       ngx_http_upstream_response_length_variable, 1,
       NGX_HTTP_VAR_NOCACHEABLE, 0 },
 
+    { ngx_string("upstream_bytes_sent"), NULL,
+      ngx_http_upstream_response_length_variable, 2,
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
 #if (NGX_HTTP_CACHE)
 
     { ngx_string("upstream_cache_status"), NULL,
@@ -619,6 +624,7 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
         return;
     }
 
+    // 获取当前请求里的upstream结构
     u = r->upstream;
 
 #if (NGX_HTTP_CACHE)
@@ -670,6 +676,7 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
 
     u->store = u->conf->store;
 
+    // 检查客户端断连
     if (!u->store && !r->post_action && !u->conf->ignore_client_abort) {
         r->read_event_handler = ngx_http_upstream_rd_check_broken_connection;
         r->write_event_handler = ngx_http_upstream_wr_check_broken_connection;
@@ -693,6 +700,7 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
         return;
     }
 
+    // 是否要求上游keep alive
     if (u->conf->socket_keepalive) {
         u->peer.so_keepalive = 1;
     }
@@ -711,6 +719,7 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
 
     u->writer.pool = r->pool;
 
+    // 上游的连接状态，可能连接多个，所以是数组
     if (r->upstream_states == NULL) {
 
         r->upstream_states = ngx_array_create(r->pool, 1,
@@ -744,6 +753,8 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
     cln->data = r;
     u->cleanup = &cln->handler;
 
+    // 没有手工指定上游地址
+    // 使用upsteam{}配置，负载均衡
     if (u->resolved == NULL) {
 
         uscf = u->conf->upstream;
@@ -850,6 +861,7 @@ found:
         return;
     }
 
+    // 设置upstream服务器配置
     u->upstream = uscf;
 
 #if (NGX_HTTP_SSL)
@@ -863,6 +875,7 @@ found:
         return;
     }
 
+    // 开始连接上游的时间
     u->peer.start_time = ngx_current_msec;
 
     if (u->conf->next_upstream_tries
@@ -1324,6 +1337,7 @@ failed:
 }
 
 
+// 上游连接读写事件的处理函数
 static void
 ngx_http_upstream_handler(ngx_event_t *ev)
 {
@@ -1331,12 +1345,16 @@ ngx_http_upstream_handler(ngx_event_t *ev)
     ngx_http_request_t   *r;
     ngx_http_upstream_t  *u;
 
+    // c是上游连接
     c = ev->data;
     r = c->data;
 
     u = r->upstream;
+
+    // c改指向下游连接
     c = r->connection;
 
+    // 记录日志使用下游连接
     ngx_http_set_log_request(c->log, r);
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -1347,6 +1365,7 @@ ngx_http_upstream_handler(ngx_event_t *ev)
         ev->timedout = 0;
     }
 
+    // 处理上游的读写事件
     if (ev->write) {
         u->write_event_handler(r, u);
 
@@ -1575,8 +1594,8 @@ ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     r->connection->log->action = "connecting to upstream";
 
-    if (u->state && u->state->response_time) {
-        u->state->response_time = ngx_current_msec - u->state->response_time;
+    if (u->state && u->state->response_time == (ngx_msec_t) -1) {
+        u->state->response_time = ngx_current_msec - u->start_time;
     }
 
     u->state = ngx_array_push(r->upstream_states);
@@ -1588,8 +1607,12 @@ ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     ngx_memzero(u->state, sizeof(ngx_http_upstream_state_t));
 
+    // before 1.15.7
+    // u->state->response_time = ngx_current_msec;
     // 计算后端连接的时间
-    u->state->response_time = ngx_current_msec;
+    u->start_time = ngx_current_msec;
+
+    u->state->response_time = (ngx_msec_t) -1;
     u->state->connect_time = (ngx_msec_t) -1;
     u->state->header_time = (ngx_msec_t) -1;
 
@@ -1631,7 +1654,10 @@ ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     c->data = r;
 
+    // 最后会调到u->write_event_handler
     c->write->handler = ngx_http_upstream_handler;
+
+    // 最后会调到u->read_event_handler
     c->read->handler = ngx_http_upstream_handler;
 
     // 设置写事件handler，要发送请求
@@ -2096,7 +2122,7 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
 
     // 计算连接时间
     if (u->state->connect_time == (ngx_msec_t) -1) {
-        u->state->connect_time = ngx_current_msec - u->state->response_time;
+        u->state->connect_time = ngx_current_msec - u->start_time;
     }
 
     // 检查连接是否正常
@@ -2498,7 +2524,7 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
         // 1.12.0，保存收到的字节数
         u->state->bytes_received += n;
 
-        // 读到了一些数据，加入缓冲器，长度增加
+        // 读到了一些数据，加入缓冲区，长度增加
         u->buffer.last += n;
 
 #if 0
@@ -2530,8 +2556,11 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
             continue;
         }
 
+        // ok or error
         break;
     }
+
+    // 解析头ok or error
 
     // 返回头无效，数据出错，尝试下一个后端服务器
     if (rc == NGX_HTTP_UPSTREAM_INVALID_HEADER) {
@@ -2548,10 +2577,12 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     /* rc == NGX_OK */
 
+    // before 1.15.7
+    // u->state->header_time = ngx_current_msec - u->state->response_time;
     // 接收到的数据成功解析出了响应头
 
     // 计算响应头接收的时间
-    u->state->header_time = ngx_current_msec - u->state->response_time;
+    u->state->header_time = ngx_current_msec - u->start_time;
 
     // 查看响应状态，注意是在upstream结构体里
     if (u->headers_in.status_n >= NGX_HTTP_SPECIAL_RESPONSE) {
@@ -2619,6 +2650,7 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 //
 //    ngx_http_upstream_process_body_in_memory(r, u);
 
+    // 发送数据给下游，之前已经正确处理了上游的响应头
     ngx_http_upstream_send_response(r, u);
 }
 
@@ -3146,6 +3178,9 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
+    // 判断u->buffering标志位
+    // 0表示只有一块缓冲区，需要使用filter处理
+    // 数据在内存里做处理
     if (!u->buffering) {
 
 #if (NGX_HTTP_CACHE)
@@ -3156,6 +3191,7 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
 #endif
 
+        // 检查过滤器，如果模块没有设置就使用默认的
         if (u->input_filter == NULL) {
             u->input_filter_init = ngx_http_upstream_non_buffered_filter_init;
             u->input_filter = ngx_http_upstream_non_buffered_filter;
@@ -3168,6 +3204,7 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
         r->limit_rate = 0;
 
+        // 过滤器初始化
         if (u->input_filter_init(u->input_filter_ctx) == NGX_ERROR) {
             ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
             return;
@@ -3180,6 +3217,7 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
         n = u->buffer.last - u->buffer.pos;
 
+        // 执行过滤
         if (n) {
             u->buffer.last = u->buffer.pos;
 
@@ -4331,6 +4369,10 @@ ngx_http_upstream_next(ngx_http_request_t *r, ngx_http_upstream_t *u,
 
     if (u->peer.sockaddr) {
 
+        if (u->peer.connection) {
+            u->state->bytes_sent = u->peer.connection->sent;
+        }
+
         if (ft_type == NGX_HTTP_UPSTREAM_FT_HTTP_403
             || ft_type == NGX_HTTP_UPSTREAM_FT_HTTP_404)
         {
@@ -4509,13 +4551,17 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
         u->resolved->ctx = NULL;
     }
 
-    if (u->state && u->state->response_time) {
-        u->state->response_time = ngx_current_msec - u->state->response_time;
+    if (u->state && u->state->response_time == (ngx_msec_t) -1) {
+        u->state->response_time = ngx_current_msec - u->start_time;
 
         if (u->pipe && u->pipe->read_length) {
             u->state->bytes_received += u->pipe->read_length
                                         - u->pipe->preread_size;
             u->state->response_length = u->pipe->read_length;
+        }
+
+        if (u->peer.connection) {
+            u->state->bytes_sent = u->peer.connection->sent;
         }
     }
 
@@ -5620,18 +5666,18 @@ ngx_http_upstream_response_time_variable(ngx_http_request_t *r,
     state = r->upstream_states->elts;
 
     for ( ;; ) {
-        if (state[i].status) {
 
-            if (data == 1 && state[i].header_time != (ngx_msec_t) -1) {
-                ms = state[i].header_time;
+        if (data == 1) {
+            ms = state[i].header_time;
 
-            } else if (data == 2 && state[i].connect_time != (ngx_msec_t) -1) {
-                ms = state[i].connect_time;
+        } else if (data == 2) {
+            ms = state[i].connect_time;
 
-            } else {
-                ms = state[i].response_time;
-            }
+        } else {
+            ms = state[i].response_time;
+        }
 
+        if (ms != -1) {
             ms = ngx_max(ms, 0);
             p = ngx_sprintf(p, "%T.%03M", (time_t) ms / 1000, ms % 1000);
 
@@ -5700,6 +5746,9 @@ ngx_http_upstream_response_length_variable(ngx_http_request_t *r,
 
         if (data == 1) {
             p = ngx_sprintf(p, "%O", state[i].bytes_received);
+
+        } else if (data == 2) {
+            p = ngx_sprintf(p, "%O", state[i].bytes_sent);
 
         } else {
             p = ngx_sprintf(p, "%O", state[i].response_length);

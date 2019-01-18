@@ -19,14 +19,14 @@ Nginx1.14增加了mirror模块，支持gRPC。
 * [ngx_google_perftools_profiler](https://github.com/chronolaw/ngx_google_perftools_profiler_module) - A better tools for nginx with google_perftools
 
 # 当前状态
-Nginx 1.15.6
+Nginx 1.15.8
 
 # Git分支
 分支    |说明   |注释
 --------|-------|-----
-master  | Nginx开发版1.15.6|有
-mainline| Nginx开发版1.15.6|无
-stable  | Nginx稳定版1.14.0|无
+master  | Nginx开发版1.15.8|有
+mainline| Nginx开发版1.15.8|无
+stable  | Nginx稳定版1.14.2|无
 
 # 已注解
 
@@ -161,4 +161,3 @@ stable  | Nginx稳定版1.14.0|无
 
 * auto
 * mail
-* misc

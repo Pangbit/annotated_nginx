@@ -229,6 +229,7 @@ typedef struct {
 
     ngx_hash_t                 headers_in_hash;
 
+    // 变量的散列表
     ngx_hash_t                 variables_hash;
 
     // 存储http里定义的所有变量
@@ -246,6 +247,8 @@ typedef struct {
     ngx_uint_t                 variables_hash_max_size;
     ngx_uint_t                 variables_hash_bucket_size;
 
+    // hash表初始化完毕，临时的variables_keys不再需要
+    // 置为空指针，最后在tmp_pool时释放
     ngx_hash_keys_arrays_t    *variables_keys;
 
     // http{}里定义的所有监听端口

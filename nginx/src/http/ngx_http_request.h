@@ -682,6 +682,7 @@ struct ngx_http_request_s {
 
     unsigned                          aio:1;
 
+    // ngx_http_state_e,标记当前请求所在的处理状态
     unsigned                          http_state:4;
 
     /* URI with "/." and on Win32 with "//" */
@@ -711,6 +712,7 @@ struct ngx_http_request_s {
     // 目前最多10次，超过则报错不能继续处理
     unsigned                          uri_changes:4;
 
+    // 读取body到单个内存缓冲区
     unsigned                          request_body_in_single_buf:1;
 
     // 是否把请求体数据存入文件，与request_body_no_buffering相反
@@ -725,9 +727,11 @@ struct ngx_http_request_s {
     // 1-不缓存请求体数据
     unsigned                          request_body_no_buffering:1;
 
-    // 要求upstream的数据都在内存里，方便处理
+    // 要求子请求的数据都在内存里，方便处理
+    // 同时置filter_need_in_memory
     unsigned                          subrequest_in_memory:1;
 
+    // NGX_HTTP_SUBREQUEST_WAITED
     unsigned                          waited:1;
 
 #if (NGX_HTTP_CACHE)
@@ -738,6 +742,10 @@ struct ngx_http_request_s {
     unsigned                          gzip_tested:1;
     unsigned                          gzip_ok:1;
     unsigned                          gzip_vary:1;
+#endif
+
+#if (NGX_PCRE)
+    unsigned                          realloc_captures:1;
 #endif
 
     unsigned                          proxy:1;
@@ -815,7 +823,9 @@ struct ngx_http_request_s {
     unsigned                          stat_writing:1;
     unsigned                          stat_processing:1;
 
+    // NGX_HTTP_SUBREQUEST_BACKGROUND
     unsigned                          background:1;
+
     unsigned                          health_check:1;
 
     /* used to parse HTTP headers */
