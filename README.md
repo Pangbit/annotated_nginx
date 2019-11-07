@@ -4,29 +4,30 @@ Annotated Nginx Source（中文）
 # 简介
 Nginx源码分析，注解代码，帮助学习Nginx。
 
-Nginx1.10增加了动态模块、http2、reuseport。
-
-Nginx1.11.x里的stream模块的变动较大，完善了阶段处理。
-
-Nginx1.14增加了mirror模块，支持gRPC。
+* 1.10增加了动态模块、http2、reuseport。
+* 1.11.x里的stream模块的变动较大，完善了阶段处理。
+* 1.14增加了mirror模块，支持gRPC。
+* 1.15.10增加了range listen,指令“ssl_certificate”可从变量里加载证书。
+* 1.17.0不再支持OpenSSL 0.98,limit_rate/proxy_upload_rate支持变量。
 
 请参考：
-* [《Nginx完全开发指南：使用C/C++和OpenResty》](http://item.jd.com/12082107.html)
+* [《Nginx完全开发指南：使用C/C++/JavaScript/Lua》](https://item.jd.com/12536113.html)
+* [透视HTTP协议](https://time.geekbang.org/column/intro/189)
 * [ngx_cpp_dev](https://github.com/chronolaw/ngx_cpp_dev)
 * [ngx_ansic_dev](https://github.com/chronolaw/ngx_ansic_dev)
 * [openresty_dev](https://github.com/chronolaw/openresty_dev)
 * [favorite-nginx](https://github.com/chronolaw/favorite-nginx)
-* [ngx_google_perftools_profiler](https://github.com/chronolaw/ngx_google_perftools_profiler_module) - A better tools for nginx with google_perftools
+* [ngx_google_perftools_profiler](https://github.com/chronolaw/ngx_google_perftools_profiler_module)
 
 # 当前状态
-Nginx 1.15.8
+Nginx 1.17.5
 
 # Git分支
 分支    |说明   |注释
 --------|-------|-----
-master  | Nginx开发版1.15.8|有
-mainline| Nginx开发版1.15.8|无
-stable  | Nginx稳定版1.14.2|无
+master  | Nginx开发版1.17.5|有
+mainline| Nginx开发版1.17.5|无
+stable  | Nginx稳定版1.16.0|无
 
 # 已注解
 

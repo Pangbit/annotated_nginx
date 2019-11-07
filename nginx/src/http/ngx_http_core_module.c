@@ -581,7 +581,7 @@ static ngx_command_t  ngx_http_core_commands[] = {
     { ngx_string("limit_rate"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
                         |NGX_CONF_TAKE1,
-      ngx_conf_set_size_slot,
+      ngx_http_set_complex_value_size_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_core_loc_conf_t, limit_rate),
       NULL },
@@ -591,7 +591,7 @@ static ngx_command_t  ngx_http_core_commands[] = {
     { ngx_string("limit_rate_after"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
                         |NGX_CONF_TAKE1,
-      ngx_conf_set_size_slot,
+      ngx_http_set_complex_value_size_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_core_loc_conf_t, limit_rate_after),
       NULL },
@@ -1837,9 +1837,9 @@ ngx_http_update_location_config(ngx_http_request_t *r)
         r->connection->tcp_nopush = NGX_TCP_NOPUSH_DISABLED;
     }
 
-    if (r->limit_rate == 0) {
-        r->limit_rate = clcf->limit_rate;
-    }
+    //if (r->limit_rate == 0) {
+    //    r->limit_rate = clcf->limit_rate;
+    //}
 
     // 注意这里，设置了请求在location里的专用处理handler
     if (clcf->handler) {
@@ -2139,6 +2139,7 @@ ngx_http_set_exten(ngx_http_request_t *r)
 }
 
 
+// 计算etag
 ngx_int_t
 ngx_http_set_etag(ngx_http_request_t *r)
 {
@@ -2151,31 +2152,41 @@ ngx_http_set_etag(ngx_http_request_t *r)
         return NGX_OK;
     }
 
+    // 添加一个头
     etag = ngx_list_push(&r->headers_out.headers);
     if (etag == NULL) {
         return NGX_ERROR;
     }
 
+    // hash=1表示启用头
     etag->hash = 1;
+
+    // 设置key
     ngx_str_set(&etag->key, "ETag");
 
+    // 分配value的内存,off_t+time_t的长度再加3
     etag->value.data = ngx_pnalloc(r->pool, NGX_OFF_T_LEN + NGX_TIME_T_LEN + 3);
     if (etag->value.data == NULL) {
         etag->hash = 0;
         return NGX_ERROR;
     }
 
+    // 打印字符串作为etag
+    // 修改时间+长度，然后有两个引号和‘-’
     etag->value.len = ngx_sprintf(etag->value.data, "\"%xT-%xO\"",
                                   r->headers_out.last_modified_time,
                                   r->headers_out.content_length_n)
                       - etag->value.data;
 
+    // 最后设置输出头的指针关联
     r->headers_out.etag = etag;
 
     return NGX_OK;
 }
 
 
+// 弱etag，多了个“W/”
+// 参考ngx_http_image_filter_module
 void
 ngx_http_weak_etag(ngx_http_request_t *r)
 {
@@ -2189,6 +2200,7 @@ ngx_http_weak_etag(ngx_http_request_t *r)
         return;
     }
 
+    // 已经是弱etag则不处理
     if (etag->value.len > 2
         && etag->value.data[0] == 'W'
         && etag->value.data[1] == '/')
@@ -2202,6 +2214,7 @@ ngx_http_weak_etag(ngx_http_request_t *r)
         return;
     }
 
+    // 多分配两个字符
     p = ngx_pnalloc(r->pool, etag->value.len + 2);
     if (p == NULL) {
         r->headers_out.etag->hash = 0;
@@ -2209,6 +2222,7 @@ ngx_http_weak_etag(ngx_http_request_t *r)
         return;
     }
 
+    // 添加“w/”即可
     len = ngx_sprintf(p, "W/%V", &etag->value) - p;
 
     etag->value.data = p;
@@ -2227,8 +2241,10 @@ ngx_http_send_response(ngx_http_request_t *r, ngx_uint_t status,
     ngx_chain_t   out;
 
     // 这时已经不需要body了，所以丢弃
-    if (ngx_http_discard_request_body(r) != NGX_OK) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    rc = ngx_http_discard_request_body(r);
+
+    if (rc != NGX_OK) {
+        return rc;
     }
 
     // 设置响应头里的状态码
@@ -2519,6 +2535,8 @@ ngx_http_auth_basic_user(ngx_http_request_t *r)
 
 #if (NGX_HTTP_GZIP)
 
+// 检查accept_encoding
+// 决定是否可以gzip
 ngx_int_t
 ngx_http_gzip_ok(ngx_http_request_t *r)
 {
@@ -2528,17 +2546,22 @@ ngx_http_gzip_ok(ngx_http_request_t *r)
     ngx_table_elt_t           *e, *d, *ae;
     ngx_http_core_loc_conf_t  *clcf;
 
+    // 避免重复检测
     r->gzip_tested = 1;
 
+    // 子请求不处理
     if (r != r->main) {
         return NGX_DECLINED;
     }
 
+    // 取accept_encoding
+    // 没有则不gzip
     ae = r->headers_in.accept_encoding;
     if (ae == NULL) {
         return NGX_DECLINED;
     }
 
+    // 长度不等于gzip
     if (ae->value.len < sizeof("gzip") - 1) {
         return NGX_DECLINED;
     }
@@ -2552,7 +2575,9 @@ ngx_http_gzip_ok(ngx_http_request_t *r)
      *   Opera:   "gzip, deflate"
      */
 
+    // 优化，通常gzip都是第一个选项
     if (ngx_memcmp(ae->value.data, "gzip,", 5) != 0
+        // 否则再字符串比较查找，判断qvalue
         && ngx_http_gzip_accept_encoding(&ae->value) != NGX_OK)
     {
         return NGX_DECLINED;
@@ -2560,10 +2585,12 @@ ngx_http_gzip_ok(ngx_http_request_t *r)
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
+    // ie6特殊
     if (r->headers_in.msie6 && clcf->gzip_disable_msie6) {
         return NGX_DECLINED;
     }
 
+    // 指令的版本设置
     if (r->http_version < clcf->gzip_http_version) {
         return NGX_DECLINED;
     }
@@ -3376,6 +3403,8 @@ ngx_http_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
 {
     char                        *rv;
     void                        *mconf;
+    size_t                       len;
+    u_char                      *p;
     ngx_uint_t                   i;
     ngx_conf_t                   pcf;
     ngx_http_module_t           *module;
@@ -3496,7 +3525,14 @@ ngx_http_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     if (rv == NGX_CONF_OK && !cscf->listen) {
         ngx_memzero(&lsopt, sizeof(ngx_http_listen_opt_t));
 
-        sin = &lsopt.sockaddr.sockaddr_in;
+        p = ngx_pcalloc(cf->pool, sizeof(struct sockaddr_in));
+        if (p == NULL) {
+            return NGX_CONF_ERROR;
+        }
+
+        lsopt.sockaddr = (struct sockaddr *) p;
+
+        sin = (struct sockaddr_in *) p;
 
         sin->sin_family = AF_INET;
 #if (NGX_WIN32)
@@ -3519,8 +3555,16 @@ ngx_http_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
 #endif
         lsopt.wildcard = 1;
 
-        (void) ngx_sock_ntop(&lsopt.sockaddr.sockaddr, lsopt.socklen,
-                             lsopt.addr, NGX_SOCKADDR_STRLEN, 1);
+        len = NGX_INET_ADDRSTRLEN + sizeof(":65535") - 1;
+
+        p = ngx_pnalloc(cf->pool, len);
+        if (p == NULL) {
+            return NGX_CONF_ERROR;
+        }
+
+        lsopt.addr_text.data = p;
+        lsopt.addr_text.len = ngx_sock_ntop(lsopt.sockaddr, lsopt.socklen, p,
+                                            len, 1);
 
         if (ngx_http_add_listen(cf, cscf, &lsopt) != NGX_OK) {
             return NGX_CONF_ERROR;
@@ -4129,6 +4173,8 @@ ngx_http_core_create_loc_conf(ngx_conf_t *cf)
      *     clcf->exact_match = 0;
      *     clcf->auto_redirect = 0;
      *     clcf->alias = 0;
+     *     clcf->limit_rate = NULL;
+     *     clcf->limit_rate_after = NULL;
      *     clcf->gzip_proxied = 0;
      *     clcf->keepalive_disable = 0;
      */
@@ -4159,8 +4205,6 @@ ngx_http_core_create_loc_conf(ngx_conf_t *cf)
     clcf->send_timeout = NGX_CONF_UNSET_MSEC;
     clcf->send_lowat = NGX_CONF_UNSET_SIZE;
     clcf->postpone_output = NGX_CONF_UNSET_SIZE;
-    clcf->limit_rate = NGX_CONF_UNSET_SIZE;
-    clcf->limit_rate_after = NGX_CONF_UNSET_SIZE;
     clcf->keepalive_timeout = NGX_CONF_UNSET_MSEC;
     clcf->keepalive_header = NGX_CONF_UNSET;
     clcf->keepalive_requests = NGX_CONF_UNSET_UINT;
@@ -4389,9 +4433,15 @@ ngx_http_core_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_size_value(conf->send_lowat, prev->send_lowat, 0);
     ngx_conf_merge_size_value(conf->postpone_output, prev->postpone_output,
                               1460);
-    ngx_conf_merge_size_value(conf->limit_rate, prev->limit_rate, 0);
-    ngx_conf_merge_size_value(conf->limit_rate_after, prev->limit_rate_after,
-                              0);
+
+    if (conf->limit_rate == NULL) {
+        conf->limit_rate = prev->limit_rate;
+    }
+
+    if (conf->limit_rate_after == NULL) {
+        conf->limit_rate_after = prev->limit_rate_after;
+    }
+
     ngx_conf_merge_msec_value(conf->keepalive_timeout,
                               prev->keepalive_timeout, 75000);
     ngx_conf_merge_sec_value(conf->keepalive_header,
@@ -4550,10 +4600,11 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_memzero(&lsopt, sizeof(ngx_http_listen_opt_t));
 
     // 拷贝ip地址
-    ngx_memcpy(&lsopt.sockaddr.sockaddr, &u.sockaddr, u.socklen);
+    //ngx_memcpy(&lsopt.sockaddr.sockaddr, &u.sockaddr, u.socklen);
 
     // 从ngx_url_t里拷贝信息
-    lsopt.socklen = u.socklen;
+    //lsopt.socklen = u.socklen;
+
     lsopt.backlog = NGX_LISTEN_BACKLOG;
     lsopt.rcvbuf = -1;
     lsopt.sndbuf = -1;
@@ -4563,14 +4614,13 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 #if (NGX_HAVE_TCP_FASTOPEN)
     lsopt.fastopen = -1;
 #endif
-    lsopt.wildcard = u.wildcard;
 #if (NGX_HAVE_INET6)
     lsopt.ipv6only = 1;
 #endif
 
     // 存储地址的字符串形式
-    (void) ngx_sock_ntop(&lsopt.sockaddr.sockaddr, lsopt.socklen, lsopt.addr,
-                         NGX_SOCKADDR_STRLEN, 1);
+    //(void) ngx_sock_ntop(&lsopt.sockaddr.sockaddr, lsopt.socklen, lsopt.addr,
+    //                     NGX_SOCKADDR_STRLEN, 1);
 
     // 检查其他参数，如bind/backlog/sndbuf/rcvbuf
     for (n = 2; n < cf->args->nelts; n++) {
@@ -4698,33 +4748,21 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
         if (ngx_strncmp(value[n].data, "ipv6only=o", 10) == 0) {
 #if (NGX_HAVE_INET6 && defined IPV6_V6ONLY)
-            struct sockaddr  *sa;
+            if (ngx_strcmp(&value[n].data[10], "n") == 0) {
+                lsopt.ipv6only = 1;
 
-            sa = &lsopt.sockaddr.sockaddr;
-
-            if (sa->sa_family == AF_INET6) {
-
-                if (ngx_strcmp(&value[n].data[10], "n") == 0) {
-                    lsopt.ipv6only = 1;
-
-                } else if (ngx_strcmp(&value[n].data[10], "ff") == 0) {
-                    lsopt.ipv6only = 0;
-
-                } else {
-                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                                       "invalid ipv6only flags \"%s\"",
-                                       &value[n].data[9]);
-                    return NGX_CONF_ERROR;
-                }
-
-                lsopt.set = 1;
-                lsopt.bind = 1;
+            } else if (ngx_strcmp(&value[n].data[10], "ff") == 0) {
+                lsopt.ipv6only = 0;
 
             } else {
                 ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                                   "ipv6only is not supported "
-                                   "on addr \"%s\", ignored", lsopt.addr);
+                                   "invalid ipv6only flags \"%s\"",
+                                   &value[n].data[9]);
+                return NGX_CONF_ERROR;
             }
+
+            lsopt.set = 1;
+            lsopt.bind = 1;
 
             continue;
 #else
@@ -4882,11 +4920,23 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }   //for检查参数结束
 
     // 加入cmcf->ports数组
-    if (ngx_http_add_listen(cf, cscf, &lsopt) == NGX_OK) {
-        return NGX_CONF_OK;
+    //if (ngx_http_add_listen(cf, cscf, &lsopt) == NGX_OK) {
+    //    return NGX_CONF_OK;
+    //}
+
+    // 1.15.10,range listen
+    for (n = 0; n < u.naddrs; n++) {
+        lsopt.sockaddr = u.addrs[n].sockaddr;
+        lsopt.socklen = u.addrs[n].socklen;
+        lsopt.addr_text = u.addrs[n].name;
+        lsopt.wildcard = ngx_inet_wildcard(lsopt.sockaddr);
+
+        if (ngx_http_add_listen(cf, cscf, &lsopt) != NGX_OK) {
+            return NGX_CONF_ERROR;
+        }
     }
 
-    return NGX_CONF_ERROR;
+    return NGX_CONF_OK;
 }
 
 

@@ -272,6 +272,8 @@ ngx_slab_init(ngx_slab_pool_t *pool)
     // 与slots类似
     pool->free.slab = 0;
     pool->free.next = page;
+
+    // prev可能在调整链表时置值，但并无大用处
     pool->free.prev = 0;
 
     // 连续空闲页数量
@@ -280,6 +282,8 @@ ngx_slab_init(ngx_slab_pool_t *pool)
     // 两个指针都指向头节点
     page->next = &pool->free;
     page->prev = (uintptr_t) &pool->free;
+
+    // 此时free链表里仅有一个节点，是全部空闲页
 
     // 真正可用的内存空间，去掉页数组
     // 有指针对齐,对齐到4k，可能会有内存浪费
@@ -489,7 +493,7 @@ ngx_slab_alloc_locked(ngx_slab_pool_t *pool, size_t size)
                 // busy是0xfffff,即此内存页已经全部分配，无空闲
                 if (page->slab == NGX_SLAB_BUSY) {
 
-                    // 找管理页
+                    // 找前一页
                     prev = ngx_slab_page_prev(page);
 
                     // 从slots的链表里摘除
@@ -655,7 +659,7 @@ ngx_slab_alloc_locked(ngx_slab_pool_t *pool, size_t size)
             page->next = &slots[slot];
 
             // 设置页的标记，exact，精确分配
-            // prev可以理解为此page的管理信息
+            // prev可以理解为此page的标志信息
             // prev有两部分信息，高位是指针，低位是标志
             page->prev = (uintptr_t) &slots[slot] | NGX_SLAB_EXACT;
 
@@ -1015,13 +1019,15 @@ ngx_slab_free_locked(ngx_slab_pool_t *pool, void *p)
 
         // 算出使用的page数组位置
         // 指针减去内存池地址，再除以4k取整
-        n = ((u_char *) p - pool->start) >> ngx_pagesize_shift;
+        // 此处是冗余计算，在1.15.9后的版本里删除
+        //n = ((u_char *) p - pool->start) >> ngx_pagesize_shift;
+        //ngx_slab_free_pages(pool, &pool->pages[n], size);
 
         // 位运算去掉高位，得到连续页数量
         size = slab & ~NGX_SLAB_PAGE_START;
 
         // 释放多个内存页，支持合并
-        ngx_slab_free_pages(pool, &pool->pages[n], size);
+        ngx_slab_free_pages(pool, page, size);
 
         // 调试用宏，内存放入垃圾数据
         // 正式环境不会起作用

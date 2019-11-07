@@ -80,10 +80,14 @@ typedef struct {
     // socket地址，使用union适应各种情形
     // 主要使用的是u.sockaddr
     // 1.11.x改为在ngx_inet.h里定义的ngx_sockaddr_t，简化了代码
-    ngx_sockaddr_t             sockaddr;
+    // 1.15.10后又改成了指针形式的数组
+    //ngx_sockaddr_t             sockaddr;
+
+    struct sockaddr           *sockaddr;
 
     // socket地址长度
     socklen_t                  socklen;
+    ngx_str_t                  addr_text;
 
     unsigned                   set:1;
     unsigned                   default_server:1;
@@ -126,8 +130,6 @@ typedef struct {
 #if (NGX_HAVE_DEFERRED_ACCEPT && defined SO_ACCEPTFILTER)
     char                      *accept_filter;
 #endif
-
-    u_char                     addr[NGX_SOCKADDR_STRLEN + 1];
 } ngx_http_listen_opt_t;
 
 
@@ -484,11 +486,11 @@ struct ngx_http_core_loc_conf_s {
 
     // 限制速率
     // 用在ngx_http_write_filter_module.c
-    size_t        limit_rate;              /* limit_rate */
+    //size_t        limit_rate;              /* limit_rate */
 
     // 限制速率
     // 用在ngx_http_write_filter_module.c
-    size_t        limit_rate_after;        /* limit_rate_after */
+    //size_t        limit_rate_after;        /* limit_rate_after */
 
     // 发送数据的限制，默认是0，即不限制，尽量多发
     // 用在ngx_http_write_filter_module.c
@@ -497,6 +499,10 @@ struct ngx_http_core_loc_conf_s {
     size_t        read_ahead;              /* read_ahead */
     size_t        subrequest_output_buffer_size;
                                            /* subrequest_output_buffer_size */
+
+    // 1.17.0 新变量
+    ngx_http_complex_value_t  *limit_rate; /* limit_rate */
+    ngx_http_complex_value_t  *limit_rate_after; /* limit_rate_after */
 
     // 超时相关的参数
     ngx_msec_t    client_body_timeout;     /* client_body_timeout */
