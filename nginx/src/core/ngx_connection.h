@@ -86,8 +86,6 @@ struct ngx_listening_s {
 
     /* should be here because of the AcceptEx() preread */
     size_t              post_accept_buffer_size;
-    /* should be here because of the deferred accept */
-    ngx_msec_t          post_accept_timeout;
 
     // 链表指针，多个ngx_listening_t组成一个单向链表
     ngx_listening_t    *previous;
@@ -264,8 +262,7 @@ struct ngx_connection_s {
     // 客户端的sockaddr，文本形式
     ngx_str_t           addr_text;
 
-    ngx_str_t           proxy_protocol_addr;
-    in_port_t           proxy_protocol_port;
+    ngx_proxy_protocol_t  *proxy_protocol;
 
     // 给https协议用的成员
     // 定义在event/ngx_event_openssl.h
@@ -298,6 +295,9 @@ struct ngx_connection_s {
     // ngx_event_accept.c:ngx_event_accept()
     // c->number = ngx_atomic_fetch_add(ngx_connection_counter, 1);
     ngx_atomic_uint_t   number;
+
+    // 1.19.10 连接开始的时间
+    ngx_msec_t          start_time;
 
     // 处理的请求次数，在ngx_http_create_request里增加
     // 用来控制长连接里可处理的请求次数，指令keepalive_requests

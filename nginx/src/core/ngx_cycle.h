@@ -136,6 +136,7 @@ struct ngx_cycle_s {
     // 复用连接对象队列
     ngx_queue_t               reusable_connections_queue;
     ngx_uint_t                reusable_connections_n;
+    time_t                    connections_reuse_time;
 
     // 监听的端口数组, in ngx_connection.h
     // 主要成员: fd,backlog,rcvbuf,sndbuf
@@ -194,6 +195,9 @@ struct ngx_cycle_s {
     // #define NGX_PREFIX  "/usr/local/nginx/"
     // 即-p选项指定的工作目录
     ngx_str_t                 prefix;
+
+    // 1.19.5 error log filename
+    ngx_str_t                 error_log;
 
     // 在linux里直接用共享内存实现锁，此成员无用
     ngx_str_t                 lock_file;

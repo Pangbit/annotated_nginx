@@ -975,7 +975,7 @@ ngx_conf_include(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
 
 // 决定使用conf_prefix还是prefix得到完整文件名
-// 如果不是以“\”开始的绝对路径，就加上前缀/usr/local/nginx/conf
+// 如果不是以“/”开始的绝对路径，就加上前缀/usr/local/nginx/conf
 ngx_int_t
 ngx_conf_full_name(ngx_cycle_t *cycle, ngx_str_t *name, ngx_uint_t conf_prefix)
 {
@@ -1242,7 +1242,7 @@ ngx_conf_set_keyval_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     a = (ngx_array_t **) (p + cmd->offset);
 
-    if (*a == NULL) {
+    if (*a == NGX_CONF_UNSET_PTR || *a == NULL) {
         *a = ngx_array_create(cf->pool, 4, sizeof(ngx_keyval_t));
         if (*a == NULL) {
             return NGX_CONF_ERROR;

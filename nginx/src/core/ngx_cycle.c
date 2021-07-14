@@ -139,6 +139,16 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
         return NULL;
     }
 
+    // 1.19.5
+    cycle->error_log.len = old_cycle->error_log.len;
+    cycle->error_log.data = ngx_pnalloc(pool, old_cycle->error_log.len + 1);
+    if (cycle->error_log.data == NULL) {
+        ngx_destroy_pool(pool);
+        return NULL;
+    }
+    ngx_cpystrn(cycle->error_log.data, old_cycle->error_log.data,
+                old_cycle->error_log.len + 1);
+
     // 从old_cycle拷贝conf_file
     cycle->conf_file.len = old_cycle->conf_file.len;
     cycle->conf_file.data = ngx_pnalloc(pool, old_cycle->conf_file.len + 1);
@@ -653,6 +663,7 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
                 {
                     // 直接替换之前打开的socket描述符
                     nls[n].fd = ls[i].fd;
+                    nls[n].inherited = ls[i].inherited;
                     nls[n].previous = &ls[i];
 
                     // 置remain标记，已经找到，不需要再处理
@@ -918,6 +929,7 @@ old_shm_zone_done:
 
     ngx_destroy_pool(conf.temp_pool);
 
+    // 初始化完成，删除old_cycle的内存池，删除old_cycle对象
     if (ngx_process == NGX_PROCESS_MASTER || ngx_is_init_cycle(old_cycle)) {
 
         ngx_destroy_pool(old_cycle->pool);
@@ -1193,6 +1205,7 @@ ngx_int_t
 ngx_create_pidfile(ngx_str_t *name, ngx_log_t *log)
 {
     size_t      len;
+    ngx_int_t   rc;
     ngx_uint_t  create;
     ngx_file_t  file;
     u_char      pid[NGX_INT64_LEN + 2];
@@ -1217,11 +1230,13 @@ ngx_create_pidfile(ngx_str_t *name, ngx_log_t *log)
         return NGX_ERROR;
     }
 
+    rc = NGX_OK;
+
     if (!ngx_test_config) {
         len = ngx_snprintf(pid, NGX_INT64_LEN + 2, "%P%N", ngx_pid) - pid;
 
         if (ngx_write_file(&file, pid, len, 0) == NGX_ERROR) {
-            return NGX_ERROR;
+            rc = NGX_ERROR;
         }
     }
 
@@ -1230,7 +1245,7 @@ ngx_create_pidfile(ngx_str_t *name, ngx_log_t *log)
                       ngx_close_file_n " \"%s\" failed", file.name.data);
     }
 
-    return NGX_OK;
+    return rc;
 }
 
 

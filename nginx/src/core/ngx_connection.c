@@ -592,22 +592,26 @@ ngx_open_listening_sockets(ngx_cycle_t *cycle)
                 return NGX_ERROR;
             }
 
-            // 设置SO_REUSEADDR选项
-            if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
-                           (const void *) &reuseaddr, sizeof(int))
-                == -1)
-            {
-                ngx_log_error(NGX_LOG_EMERG, log, ngx_socket_errno,
-                              "setsockopt(SO_REUSEADDR) %V failed",
-                              &ls[i].addr_text);
+            // 1.21.1 optimization for test
+            if (ls[i].type != SOCK_DGRAM || !ngx_test_config) {
 
-                if (ngx_close_socket(s) == -1) {
+                // 设置SO_REUSEADDR选项
+                if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
+                               (const void *) &reuseaddr, sizeof(int))
+                    == -1)
+                {
                     ngx_log_error(NGX_LOG_EMERG, log, ngx_socket_errno,
-                                  ngx_close_socket_n " %V failed",
+                                  "setsockopt(SO_REUSEADDR) %V failed",
                                   &ls[i].addr_text);
-                }
 
-                return NGX_ERROR;
+                    if (ngx_close_socket(s) == -1) {
+                        ngx_log_error(NGX_LOG_EMERG, log, ngx_socket_errno,
+                                      ngx_close_socket_n " %V failed",
+                                      &ls[i].addr_text);
+                    }
+
+                    return NGX_ERROR;
+                }
             }
 
             // 设置SO_REUSEPORT选项
@@ -1202,7 +1206,8 @@ ngx_close_listening_sockets(ngx_cycle_t *cycle)
         // 对于domain socket需要删除文件
         if (ls[i].sockaddr->sa_family == AF_UNIX
             && ngx_process <= NGX_PROCESS_MASTER
-            && ngx_new_binary == 0)
+            && ngx_new_binary == 0
+            && (!ls[i].inherited || ngx_getppid() != ngx_parent))
         {
             // 去掉前面的unix:前缀
             u_char *name = ls[i].addr_text.data + sizeof("unix:") - 1;
@@ -1245,20 +1250,17 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
 
     // 从全局变量ngx_cycle里获取空闲链接，即free_connections链表
     // free_connections是空闲链表头指针
+
+    // 检查最多32个在可复用连接队列里的元素
+    // 设置为连接关闭c->close = 1;
+    // 调用事件的处理函数，里面会检查c->close
+    // 这样就会调用ngx_http_close_connection
+    // 释放连接，加入空闲链表，可以再次使用
+    ngx_drain_connections((ngx_cycle_t *) ngx_cycle);
+
+    // 此时应该有了一些空闲连接
+    // 再次获取
     c = ngx_cycle->free_connections;
-
-    if (c == NULL) {
-        // 检查最多32个在可复用连接队列里的元素
-        // 设置为连接关闭c->close = 1;
-        // 调用事件的处理函数，里面会检查c->close
-        // 这样就会调用ngx_http_close_connection
-        // 释放连接，加入空闲链表，可以再次使用
-        ngx_drain_connections((ngx_cycle_t *) ngx_cycle);
-
-        // 此时应该有了一些空闲连接
-        // 再次获取
-        c = ngx_cycle->free_connections;
-    }
 
     // 如果还没有获取到连接，那么就报错
     if (c == NULL) {
@@ -1492,8 +1494,27 @@ ngx_drain_connections(ngx_cycle_t *cycle)
     ngx_queue_t       *q;
     ngx_connection_t  *c;
 
+    // 从全局变量ngx_cycle里获取空闲链接，即free_connections链表
+    // free_connections是空闲链表头指针
+
     // 早期的nginx只检查32次，避免过多消耗时间
     // 1.12改变了这个固定值
+    if (cycle->free_connection_n > cycle->connection_n / 16
+        || cycle->reusable_connections_n == 0)
+    {
+        return;
+    }
+
+    if (cycle->connections_reuse_time != ngx_time()) {
+        cycle->connections_reuse_time = ngx_time();
+
+        ngx_log_error(NGX_LOG_WARN, cycle->log, 0,
+                      "%ui worker_connections are not enough, "
+                      "reusing connections",
+                      cycle->connection_n);
+    }
+
+    c = NULL;
     n = ngx_max(ngx_min(32, cycle->reusable_connections_n / 8), 1);
 
     for (i = 0; i < n; i++) {
@@ -1518,6 +1539,21 @@ ngx_drain_connections(ngx_cycle_t *cycle)
         // 这样就会调用ngx_http_close_connection
         // 释放连接，加入空闲链表，可以再次使用
         // 例如ngx_http_wait_request_handler
+        c->read->handler(c->read);
+    }
+
+    if (cycle->free_connection_n == 0 && c && c->reusable) {
+
+        /*
+         * if no connections were freed, try to reuse the last
+         * connection again: this should free it as long as
+         * previous reuse moved it to lingering close
+         */
+
+        ngx_log_debug0(NGX_LOG_DEBUG_CORE, c->log, 0,
+                       "reusing connection again");
+
+        c->close = 1;
         c->read->handler(c->read);
     }
 }

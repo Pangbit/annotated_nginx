@@ -429,8 +429,7 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 
     // 1.17.5新增,处理ngx_posted_next_events
     if (!ngx_queue_empty(&ngx_posted_next_events)) {
-        ngx_queue_add(&ngx_posted_events, &ngx_posted_next_events);
-        ngx_queue_init(&ngx_posted_next_events);
+        ngx_event_move_posted_next(cycle);
         timer = 0;
     }
 
@@ -475,12 +474,15 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
         ngx_shmtx_unlock(&ngx_accept_mutex);
     }
 
+    // 1.19.9
     // 如果消耗了一点时间，那么看看是否定时器里有过期的
-    if (delta) {
-        // 遍历定时器红黑树，找出所有过期的事件，调用handler处理超时
-        // 其中可能有的socket读写超时，那么就结束请求，断开连接
-        ngx_event_expire_timers();
-    }
+    //if (delta) {
+    //    ngx_event_expire_timers();
+    //}
+
+    // 遍历定时器红黑树，找出所有过期的事件，调用handler处理超时
+    // 其中可能有的socket读写超时，那么就结束请求，断开连接
+    ngx_event_expire_timers();
 
     // 接下来处理延后队列里的事件，即调用事件的handler(ev)，收发数据
     // in ngx_event_posted.c
@@ -550,7 +552,7 @@ ngx_handle_read_event(ngx_event_t *rev, ngx_uint_t flags)
             return NGX_OK;
         }
 
-        if (rev->oneshot && !rev->ready) {
+        if (rev->oneshot && rev->ready) {
             if (ngx_del_event(rev, NGX_READ_EVENT, 0) == NGX_ERROR) {
                 return NGX_ERROR;
             }
@@ -688,23 +690,26 @@ ngx_event_init_conf(ngx_cycle_t *cycle, void *conf)
 
 #if (NGX_HAVE_REUSEPORT)
 
-    ls = cycle->listening.elts;
-    for (i = 0; i < cycle->listening.nelts; i++) {
-
-        if (!ls[i].reuseport || ls[i].worker != 0) {
-            continue;
-        }
-
-        // reuseport专用的函数，1.8.x没有
-        // 拷贝了worker数量个的监听结构体, in ngx_connection.c
-        // 从ngx_stream_optimize_servers等函数处转移过来
-        if (ngx_clone_listening(cycle, &ls[i]) != NGX_OK) {
-            return NGX_CONF_ERROR;
-        }
-
-        /* cloning may change cycle->listening.elts */
+    if (!ngx_test_config) {
 
         ls = cycle->listening.elts;
+        for (i = 0; i < cycle->listening.nelts; i++) {
+
+            if (!ls[i].reuseport || ls[i].worker != 0) {
+                continue;
+            }
+
+            // reuseport专用的函数，1.8.x没有
+            // 拷贝了worker数量个的监听结构体, in ngx_connection.c
+            // 从ngx_stream_optimize_servers等函数处转移过来
+            if (ngx_clone_listening(cycle, &ls[i]) != NGX_OK) {
+                return NGX_CONF_ERROR;
+            }
+
+            /* cloning may change cycle->listening.elts */
+
+            ls = cycle->listening.elts;
+        }
     }
 
 #endif
